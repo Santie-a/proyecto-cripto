@@ -1,0 +1,22 @@
+
+  Recomputando la cadena Davies-Meyer:
+
+    h0 = 00000000000000000000000000000000
+    h1 = E_{m1}(h0) XOR h0 = 692d1a9c017dc9fea6251bf243385b4b
+    h2 = E_{m2}(h1) XOR h1 = e0e9a82bb76575a94a4f0153be97c127
+    h3 = E_{m3}(h2) XOR h2 = 460eaf9791f61ab80f21f1601665fcb7
+    h4 = E_{m4}(h3) XOR h3 = 51cfb2a7bf6b973b899c232b4ecb521c
+
+    sello recomputado de este archivo : 51cfb2a7bf6b973b899c232b4ecb521c
+    sello PUBLICADO por el mercado    : 51cfb2a7bf6b973b899c232b4ecb521c
+
+  >>> SELLO CORRECTO. El registro coincide con el publicado.
+
+      Dos cosas que conviene notar:
+
+      1. Aqui NO se uso ninguna clave: solo se recomputo.
+      2. El sello de referencia NO sale de este archivo, sino de
+         sello_publicado.txt. Si saliera del mismo archivo que se
+         esta verificando, cualquiera podria cambiar una entrada,
+         recalcular y sustituir tambien el sello.
+

@@ -1,0 +1,13 @@
+
+  Registro leido de la cadena CBC:
+
+    entrada 1: 'TX01:L0042:EQ-A '   
+    entrada 2: 'TX02:L0042:EQ-B '   
+    entrada 3: 'TX03:L0177:EQ-A '   
+
+  >>> CADENA VALIDA. Todas las entradas estan bien formadas
+      y el encadenamiento es consistente.
+
+      Pregunta para el informe: el verificador acepto este
+      registro. Eso prueba que nadie lo altero?
+

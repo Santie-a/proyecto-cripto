@@ -1,0 +1,62 @@
+TALLER B - La recurrencia
+=========================
+
+De la diapositiva 37:
+
+   CBC          c_i = E_k(m_i XOR c_{i-1})     m_i = D_k(c_i) XOR c_{i-1}
+   Cadena       h_i = H(encode(B_i))           B_i = (datos_i, h_{i-1}, nonce_i)
+
+Las dos son recurrencias: cada elemento depende del anterior. La
+diapositiva dice que la diferencia formal esta en que E_k es una
+permutacion reversible si se conoce la clave, mientras que H no se
+descifra sino que se verifica por recomputacion.
+
+Este taller consiste en comprobar que esa frase no es un detalle.
+---------------------------------------------------------------
+
+EJERCICIO 1. Implementen la recurrencia CBC en las dos direcciones
+   y recuperen el registro. Despues alteren UN byte del bloque
+   cifrado c3 y determinen que entradas se danan y de que manera
+   cada una: distingan la destruida por completo de la alterada
+   solo en los bits que ustedes tocaron.
+
+EJERCICIO 2. En registro_cbc.json les damos la clave, a proposito.
+   Reescriban la historia: que TX02 diga que la licencia L0042 se
+   quedo en EQ-A, y que la cadena siga verificando. Midan cuanto
+   les toma. Conclusion obligatoria: que protege exactamente una
+   cadena construida con una funcion reversible?
+
+EJERCICIO 3. Implementen la compresion de Davies-Meyer
+
+        h_i = E_{m_i}(h_{i-1}) XOR h_{i-1}
+
+   donde el bloque de mensaje entra COMO CLAVE de AES. Comprueben
+   que reproducen el sello de sello_publicado.txt. Repitan sobre
+   esta cadena el ataque del ejercicio 2 y documenten en que punto
+   exacto se detienen.
+
+   OJO: el sello de referencia NO esta dentro de registro_dm.json.
+   Esta en sello_publicado.txt, porque es un valor PUBLICADO que
+   quien lleva el registro no controla. Piensen por que importa.
+
+cripto.py trae AES sobre 16 bytes y nada mas: los modos y la
+compresion los escriben ustedes.
+
+registro_tool.py hace por ustedes la parte aburrida: abrir los
+archivos, partir en bloques y guardar. Ustedes escriben las tres
+funciones de criptografia, que son el ejercicio:
+
+    python3 registro_tool.py ver          que hay en los archivos
+    python3 registro_tool.py leer         necesita cbc_descifrar
+    python3 registro_tool.py romper 3     necesita cbc_descifrar
+    python3 registro_tool.py reescribir   necesita cbc_cifrar
+    python3 registro_tool.py sello        necesita davies_meyer
+
+verificador.py es la herramienta que usa el mercado. Uselo para
+poner a prueba lo que construyan:
+
+    python3 verificador.py cbc registro_cbc.json
+    python3 verificador.py dm  registro_dm.json
+
+Si alteran un registro y quieren ver si el verificador se da
+cuenta, pasenle su archivo modificado.

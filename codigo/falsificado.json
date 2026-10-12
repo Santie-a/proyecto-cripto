@@ -1,0 +1,7 @@
+{
+  "modo": "CBC",
+  "formula": "c_i = E_k(m_i XOR c_{i-1})",
+  "clave": "4ac43a52cc764438cae7b3af9fced5a9",
+  "iv": "3c1cc2d73a499ca72f36e7303d76a130",
+  "cadena": "acc42ecaebdb06d4e3b2852697a919478f3ebfc015f257f20935a4a9bb070b223314b26facf1eaae43ea1b86beb9ec3b0b1fc3366cb2c953363114fc04286dc5"
+}

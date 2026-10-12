@@ -1,0 +1,11 @@
+{
+  "modo": "Davies-Meyer",
+  "formula": "h_i = E_{m_i}(h_{i-1}) XOR h_{i-1}",
+  "h0": "00000000000000000000000000000000",
+  "entradas": [
+    "TX01:L0042:EQ-A ",
+    "TX02:L0042:EQ-B ",
+    "TX03:L0177:EQ-A ",
+    "TX04:L0177:EQ-B "
+  ]
+}

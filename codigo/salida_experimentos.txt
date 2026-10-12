@@ -1,0 +1,83 @@
+
+================================================================
+  Ejercicio 1(a): ida y vuelta CBC
+================================================================
+  m1 = 'TX01:L0042:EQ-A '  (hex 545830313a4c303034323a45512d4120)
+  m2 = 'TX02:L0042:EQ-B '  (hex 545830323a4c303034323a45512d4220)
+  m3 = 'TX03:L0177:EQ-A '  (hex 545830333a4c303137373a45512d4120)
+  m4 = 'TX04:L0177:EQ-B '  (hex 545830343a4c303137373a45512d4220)
+  cbc_cifrar(cbc_descifrar(c)) == c : True
+
+================================================================
+  Ejercicio 1(b): un byte de c3 alterado (XOR 0x40 en el byte 0)
+================================================================
+  entrada 1: original 545830313a4c303034323a45512d4120
+             danada   545830313a4c303034323a45512d4120
+             XOR      00000000000000000000000000000000  (0 bytes y 0 bits distintos)
+  entrada 2: original 545830323a4c303034323a45512d4220
+             danada   545830323a4c303034323a45512d4220
+             XOR      00000000000000000000000000000000  (0 bytes y 0 bits distintos)
+  entrada 3: original 545830333a4c303137373a45512d4120
+             danada   de2854c98577947b5f0951b3d357eaad
+             XOR      8a7064fabf3ba44a683e6bf6827aab8d  (16 bytes y 68 bits distintos)
+  entrada 4: original 545830343a4c303137373a45512d4220
+             danada   145830343a4c303137373a45512d4220
+             XOR      40000000000000000000000000000000  (1 bytes y 1 bits distintos)
+
+================================================================
+  Ejercicio 2(a): reescribir la historia CBC
+================================================================
+  cadena falsificada:
+    c1* = acc42ecaebdb06d4e3b2852697a91947   (original acc42ecaebdb06d4e3b2852697a91947)
+    c2* = 8f3ebfc015f257f20935a4a9bb070b22   (original bcba08d852933bcb8614195bedb4781f)
+    c3* = 3314b26facf1eaae43ea1b86beb9ec3b   (original 7d03a3865c756f1ed89c5c56fd74c0cd)
+    c4* = 0b1fc3366cb2c953363114fc04286dc5   (original 8210d2b695c9514852ac55dcefa52261)
+  tiempo medio de la reescritura: 25.7 microsegundos (promedio de 1000)
+
+================================================================
+  Ejercicio 3(a): Davies-Meyer y el intento de ataque
+================================================================
+  h0  = 00000000000000000000000000000000
+  h1  = 692d1a9c017dc9fea6251bf243385b4b
+  h2  = e0e9a82bb76575a94a4f0153be97c127
+  h3  = 460eaf9791f61ab80f21f1601665fcb7
+  h4  = 51cfb2a7bf6b973b899c232b4ecb521c
+  sello publicado = 51cfb2a7bf6b973b899c232b4ecb521c   coincide: True
+
+  Con TX02 -> EQ-A:
+  h0* = 00000000000000000000000000000000   igual
+  h1* = 692d1a9c017dc9fea6251bf243385b4b   igual
+  h2* = a1815cf55fe8adaf93fbe63829aef30b   DISTINTO
+  h3* = d23ebb39f7eb3a5b140177367483078c   DISTINTO
+  h4* = 587819e303f7bb5c105313742441de07   DISTINTO
+  sello publicado = 51cfb2a7bf6b973b899c232b4ecb521c
+
+  Para cerrar con m4' haria falta E_{m4'}(d23ebb39f7eb3a5b140177367483078c) = 83f1099e4880ad609d9d541d3a485590
+  200000 claves probadas en 1.04 s (192126 claves/s): ninguna sirve
+  tiempo esperado para 2^128 claves: 5.6e+25 anos
+
+================================================================
+  Ejercicio 3(b): sin el termino final, la cadena SI se deja
+================================================================
+  sello de la variante h_i = E_{m_i}(h_{i-1}): 44ee89edd73c88b8149067d488eada27
+  retrocediendo con m4 (publico): h3 = acf1d4c9181c5207985f1c83c09a7700
+  retrocediendo con m3 (publico): h2 = 89c4b2b7b618bc57ec6a1aa1fdaf9a6c
+  retrocediendo con m2 (publico): h1 = 692d1a9c017dc9fea6251bf243385b4b
+  retrocediendo con m1 (publico): h0 = 00000000000000000000000000000000
+  se recupera h0: True
+  h0' que hace que la historia FALSA de el mismo sello: 4d311f3f3b922efe3b58a6d210b2bb83
+  comprobacion sin_ff(h0', falsas) == S : True
+
+================================================================
+  Ejercicio 3(c): sello guardado dentro del propio archivo
+================================================================
+  historia falsa recalculada, sello nuevo: 587819e303f7bb5c105313742441de07
+  un verificador que leyera el sello del archivo diria: SELLO CORRECTO
+  contra el sello publicado: INCORRECTO
+
+================================================================
+  Ejercicio 2(c): borrar una compra SIN la clave
+================================================================
+  sin_ultima.json  : se borro TX04 sin usar la clave
+  sin_primera.json : se borro TX01 sin usar la clave (IV' = c1)
+  pasenlos por:  python3 verificador.py cbc sin_ultima.json

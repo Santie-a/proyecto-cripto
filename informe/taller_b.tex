@@ -1,0 +1,689 @@
+\documentclass[11pt,letterpaper]{article}
+\usepackage[utf8]{inputenc}
+\usepackage[T1]{fontenc}
+\usepackage[spanish,es-noshorthands]{babel}
+\usepackage{lmodern}
+\usepackage[margin=2.3cm]{geometry}
+\usepackage{amsmath,amssymb,amsthm}
+\usepackage{booktabs,tabularx,array}
+\usepackage{xcolor}
+\usepackage{listings}
+\usepackage{enumitem}
+\usepackage{fancyhdr}
+\usepackage[hidelinks]{hyperref}
+\setlength{\headheight}{14pt}
+\sloppy
+
+\definecolor{fondo}{RGB}{246,246,246}
+\definecolor{coment}{RGB}{90,120,90}
+\lstset{
+  basicstyle=\ttfamily\footnotesize,
+  backgroundcolor=\color{fondo},
+  commentstyle=\color{coment}\itshape,
+  keywordstyle=\bfseries,
+  frame=single, framerule=0.3pt, rulecolor=\color{gray},
+  breaklines=true, columns=fullflexible, keepspaces=true,
+  showstringspaces=false, upquote=true,
+  literate={ñ}{{\~n}}1 {á}{{\'a}}1 {é}{{\'e}}1 {í}{{\'i}}1 {ó}{{\'o}}1 {ú}{{\'u}}1
+           {Þ}{{\TH}}1 {É}{{\'E}}1 {³}{{$^3$}}1 {Ó}{{\'O}}1 {ê}{{\^e}}1
+}
+\lstdefinestyle{salida}{language={}, numbers=none}
+\lstdefinestyle{py}{language=Python, numbers=left, numberstyle=\tiny\color{gray}}
+
+\newcommand{\xor}{\oplus}
+\newcommand{\B}{\{0,1\}^{128}}
+\newcommand{\paso}[1]{\par\smallskip\noindent\textbf{#1.}\ }
+\newcommand{\tesis}[1]{\par\smallskip\noindent\fbox{\parbox{0.96\linewidth}{\textbf{Tesis.} #1}}\par}
+
+\newenvironment{declaracion}{\par\medskip\noindent\textbf{Declaración de variables.}\begin{itemize}[leftmargin=1.5em,itemsep=1pt]}{\end{itemize}}
+
+\pagestyle{fancy}
+\fancyhf{}
+\lhead{Criptografía simétrica}
+\rhead{Taller B --- Grupo Blockchain}
+\cfoot{\thepage}
+
+\title{\textbf{Taller B: El registro}\\[2pt]
+\large Qué hace que una cadena de bloques no se pueda reescribir}
+\author{Integrantes: \underline{\hspace{3.5cm}}\quad \underline{\hspace{3.5cm}}\\[4pt]
+\underline{\hspace{3.5cm}}\quad \underline{\hspace{3.5cm}}\\[6pt]
+Profesor: Andrey Lizarazo}
+\date{Fecha: \underline{\hspace{3cm}}}
+
+\begin{document}
+\maketitle
+\thispagestyle{fancy}
+
+\section*{Resumen del caso}
+
+Un usuario acusa al mercado de licencias de haberle borrado una compra; el mercado responde que
+eso es imposible porque ``la cadena verifica''. En este informe construimos el mismo registro de
+dos maneras ---con CBC y con Davies--Meyer--- y mostramos que:
+\begin{itemize}[itemsep=1pt]
+  \item la cadena CBC es una biyección conocida la clave: quien la tiene reescribe cualquier
+        historia en microsegundos y el verificador la acepta; peor aún, borrar la primera o la
+        última transferencia ni siquiera requiere la clave;
+  \item la cadena Davies--Meyer no se deja retroceder: el ataque se detiene en una ecuación
+        $E_{m}(x)\xor x = h$ que no admite despeje, y que solo sirve si el sello de referencia
+        está publicado fuera del control del mercado.
+\end{itemize}
+Conclusión del caso: \emph{el argumento del mercado es falso}. Que la cadena CBC verifique no prueba
+nada sobre si el mercado la alteró. El usuario tiene razón en que el borrado era posible y además indetectable
+para el verificador.
+
+\section*{Declaración general de variables}
+
+Estas declaraciones valen para todo el informe; antes de cada ejercicio se repiten las que
+intervienen en él.
+\begin{itemize}[itemsep=1pt]
+  \item $n = 128$: número de bits de un bloque. $\B$: conjunto de bloques de 128 bits (16 bytes).
+  \item $\mathcal{K} = \B$: espacio de claves de AES-128.
+  \item $E:\mathcal{K}\times\B\to\B$, $(k,x)\mapsto E_k(x)$: cifrado AES. Para cada $k$ fija,
+        $E_k$ es una permutación de $\B$ y $D_k = E_k^{-1}$, es decir
+        $D_k(E_k(x)) = x$ y $E_k(D_k(y)) = y$ para todo $x,y\in\B$.
+  \item $\xor:\B\times\B\to\B$: suma XOR bit a bit. Propiedades que se citarán por nombre:
+    \begin{itemize}[itemsep=0pt]
+      \item[(X1)] \emph{autoinversa}: $x\xor x = 0$;
+      \item[(X2)] \emph{neutro}: $x \xor 0 = x$;
+      \item[(X3)] \emph{asociativa y conmutativa}.
+    \end{itemize}
+  \item $t\in\mathbb{Z}$, $t\ge 1$: número de entradas del registro (aquí $t=4$).
+  \item $i\in\{1,\dots,t\}$: índice de bloque. $m_i\in\B$: entrada $i$ en claro.
+        $c_i\in\B$: bloque cifrado $i$. $h_i\in\B$: valor acumulado de la cadena tras el bloque $i$.
+  \item $\|$: concatenación de bloques.
+\end{itemize}
+
+Todo el código está en la carpeta \texttt{codigo/}: \texttt{registro\_tool.py} (las tres funciones
+pedidas) y \texttt{experimentos.py} (las mediciones y ataques). Las salidas reproducidas en este
+informe son literales.
+
+%======================================================================
+\section{Ejercicio 1. La recurrencia y el error \hfill (25 puntos)}
+
+\begin{declaracion}
+  \item $k\in\mathcal{K}$: clave del mercado, \texttt{4ac43a52cc764438cae7b3af9fced5a9}.
+  \item $IV\in\B$: valor de arranque, \texttt{3c1cc2d73a499ca72f36e7303d76a130}. Convenio $c_0 := IV$.
+  \item $m_1,\dots,m_4\in\B$ y $c_1,\dots,c_4\in\B$, ligados por
+        $c_i = E_k(m_i\xor c_{i-1})$.
+  \item $e\in\B$, $e\neq 0$: máscara de error introducida en un bloque cifrado.
+  \item $c_3' = c_3\xor e\in\B$: bloque $c_3$ alterado; $m_3', m_4'\in\B$: entradas descifradas con el bloque alterado.
+\end{declaracion}
+
+\subsection*{(a) Leer el registro}
+
+\paso{Despeje de la dirección inversa}
+Partimos de la ecuación del enunciado, $c_i = E_k(m_i\xor c_{i-1})$. Aplicamos $D_k$ a ambos
+lados y usamos $D_k\circ E_k=\mathrm{id}$:
+\[
+  D_k(c_i) = m_i \xor c_{i-1}.
+\]
+Sumamos $c_{i-1}$ a ambos lados; por (X3) y (X1), $c_{i-1}\xor c_{i-1}=0$, y por (X2):
+\[
+  D_k(c_i)\xor c_{i-1} = m_i\xor (c_{i-1}\xor c_{i-1}) = m_i \xor 0 = m_i .
+\]
+Así, la recurrencia en sentido inverso es $m_i = D_k(c_i)\xor c_{i-1}$, con $c_0=IV$.
+
+\paso{Implementación} Las dos direcciones, tal como quedaron en \texttt{registro\_tool.py}:
+\begin{lstlisting}[style=py]
+def cbc_descifrar(k, iv, cadena):
+    entradas, anterior = [], iv
+    for c in bloques(cadena):
+        entradas.append(xor(aes_d(k, c), anterior))   # m_i = D_k(c_i) XOR c_{i-1}
+        anterior = c
+    return entradas
+
+def cbc_cifrar(k, iv, entradas):
+    salida, anterior = b"", iv
+    for m in entradas:
+        assert len(m) == 16
+        anterior = aes_e(k, xor(m, anterior))         # c_i = E_k(m_i XOR c_{i-1})
+        salida += anterior
+    return salida
+\end{lstlisting}
+
+\paso{Resultado} \texttt{python3 registro\_tool.py leer} devuelve:
+
+\begin{center}
+\begin{tabular}{clll}
+\toprule
+$i$ & $c_i$ & $m_i$ (hex) & $m_i$ (texto) \\
+\midrule
+1 & \texttt{acc42eca\ldots a91947} & \texttt{545830313a4c303034323a45512d4120} & \texttt{TX01:L0042:EQ-A\textvisiblespace} \\
+2 & \texttt{bcba08d8\ldots b4781f} & \texttt{545830323a4c303034323a45512d4220} & \texttt{TX02:L0042:EQ-B\textvisiblespace} \\
+3 & \texttt{7d03a386\ldots 74c0cd} & \texttt{545830333a4c303137373a45512d4120} & \texttt{TX03:L0177:EQ-A\textvisiblespace} \\
+4 & \texttt{8210d2b6\ldots a52261} & \texttt{545830343a4c303137373a45512d4220} & \texttt{TX04:L0177:EQ-B\textvisiblespace} \\
+\bottomrule
+\end{tabular}
+\end{center}
+
+Es decir: la licencia L0042 pasó a EQ-A (TX01) y luego a EQ-B (TX02); la L0177 pasó a EQ-A (TX03)
+y luego a EQ-B (TX04). Además comprobamos la ida y vuelta:
+\\ \texttt{cbc\_cifrar(k, iv, cbc\_descifrar(k, iv, c)) == c} da \texttt{True}.
+El verificador del mercado (\texttt{python3 verificador.py cbc registro\_cbc.json}) imprime
+exactamente las mismas cuatro entradas y responde \texttt{CADENA VALIDA}.
+
+\subsection*{(b) Romper un byte}
+
+\paso{1. Experimento} Alteramos el primer byte de $c_3$ con la máscara
+$e = \texttt{40}\,\texttt{00}\cdots\texttt{00}$ (un solo bit) y desciframos de nuevo
+(\texttt{python3 registro\_tool.py romper 3} y \texttt{experimentos.py}). Comparación byte a byte:
+
+\begin{center}
+\small
+\begin{tabular}{clll}
+\toprule
+Entrada & Original & Tras el daño & Diferencia ($m_i\xor m_i'$) \\
+\midrule
+1 & \texttt{545830313a4c\ldots2d4120} & \texttt{545830313a4c\ldots2d4120} & 0 bytes, 0 bits: \textbf{intacta}\\
+2 & \texttt{545830323a4c\ldots2d4220} & \texttt{545830323a4c\ldots2d4220} & 0 bytes, 0 bits: \textbf{intacta}\\
+3 & \texttt{545830333a4c\ldots2d4120} & \texttt{de2854c98577\ldots57eaad} & 16 bytes, 68 bits: \textbf{destruida}\\
+4 & \texttt{545830343a4c\ldots2d4220} & \texttt{145830343a4c\ldots2d4220} & 1 byte, 1 bit (\texttt{0x40}): \textbf{alterada}\\
+\bottomrule
+\end{tabular}
+\end{center}
+
+La diferencia completa de la entrada 3 es
+\texttt{8a7064fabf3ba44a683e6bf6827aab8d}: no guarda ninguna relación visible con $e$.
+La de la entrada 4 es \texttt{40000000000000000000000000000000}, exactamente $e$:
+la \texttt{T} (\texttt{0x54}) pasó a \texttt{0x14} y nada más cambió.
+Con este registro dañado el verificador responde \texttt{CADENA INVALIDA} y marca las entradas 3 y 4.
+
+\paso{Por qué (derivación)} Con $c_3' = c_3\xor e$ y los demás bloques sin tocar:
+\begin{itemize}[itemsep=2pt]
+  \item $m_1, m_2$: sus fórmulas $m_1 = D_k(c_1)\xor IV$ y $m_2 = D_k(c_2)\xor c_1$ no contienen a $c_3$; quedan intactas.
+  \item $m_3' = D_k(c_3\xor e)\xor c_2$. El error entra \textbf{por dentro} de $D_k$. Como $D_k$ es una permutación
+        pseudoaleatoria, $D_k(c_3\xor e)$ no tiene relación útil con $D_k(c_3)$: cada bit de salida cambia con
+        probabilidad $\approx 1/2$ (observamos 68 de 128). La entrada queda destruida e impredecible para quien no tenga $k$.
+  \item $m_4' = D_k(c_4)\xor c_3' = D_k(c_4)\xor c_3\xor e = m_4\xor e$ por (X3). El error entra \textbf{por fuera},
+        como sumando del XOR final, y pasa intacto: cambian exactamente los bits de $e$.
+  \item $m_5,\dots$ (si existieran) solo dependen de $c_4, c_5,\dots$ y quedarían intactas: el daño se propaga a
+        dos bloques y se detiene.
+\end{itemize}
+
+\paso{2. La asimetría y su consecuencia práctica}
+En $m_3$ el error está \emph{dentro} de $D_k$; en $m_4$ está \emph{fuera}. Para quien daña a propósito
+la diferencia es total:
+\begin{itemize}[itemsep=2pt]
+  \item Sobre $m_4$ tiene \textbf{control exacto y sin clave}: si quiere que $m_4$ pase a valer $m_4^*$, le basta
+        usar $e = m_4\xor m_4^*$ (es la ecuación $a\xor x=b$ del Taller 0). Lo comprobamos: con
+        $e = (\texttt{B}\xor\texttt{A})$ en la posición 14 de $c_3$, la entrada 4 pasa a decir
+        \texttt{TX04:L0177:EQ-A}, sin conocer $k$.
+  \item Sobre $m_3$ no tiene ningún control: el precio de su manipulación es que la entrada anterior
+        sale como basura. En este registro esa basura es detectable porque no cumple el formato
+        (la probabilidad de que 16 bytes aleatorios cumplan
+        \verb|TX\d\d:L\d\d\d\d:[A-Z][A-Z]-[A-Z] | es $100\cdot 10^4\cdot 26^3/2^{128}\approx 5\cdot10^{-29}$).
+\end{itemize}
+Es decir: CBC es \emph{maleable}. El adversario sin clave puede dirigir bits de un bloque a costa de
+destruir el anterior. Lo único que lo delata es la redundancia del formato, no el encadenamiento.
+Y si el bloque que se sacrifica es el IV (que viaja en claro), ni siquiera hay basura: con
+$IV' = IV\xor m_1\xor m_1^*$ se cambia $m_1$ a voluntad y todo lo demás queda intacto.
+
+%======================================================================
+\section{Ejercicio 2. Reescribir la historia \hfill (30 puntos)}
+
+\begin{declaracion}
+  \item $k\in\mathcal{K}$, $IV\in\B$ como en el ejercicio 1; $t\in\mathbb{Z}$, $t\ge 1$.
+  \item $M = (\B)^t$: conjunto de historias $(m_1,\dots,m_t)$. $C=(\B)^t$: conjunto de cadenas $(c_1,\dots,c_t)$.
+  \item $F_{k,IV}: M\to C$, la aplicación de cifrado CBC; $G_{k,IV}: C\to M$, la candidata a inversa.
+  \item $m^* = (m_1^*,\dots,m_t^*)\in M$: historia alternativa (``lo que quiero que diga'').
+\end{declaracion}
+
+\subsection*{(a) Hacerlo}
+
+Historia falsa: la misma, salvo que TX02 dice que L0042 se quedó en EQ-A:
+\[
+m^* = (\texttt{TX01:L0042:EQ-A\textvisiblespace},\ \texttt{TX02:L0042:EQ-A\textvisiblespace},\ \texttt{TX03:L0177:EQ-A\textvisiblespace},\ \texttt{TX04:L0177:EQ-B\textvisiblespace}).
+\]
+Con \texttt{python3 registro\_tool.py reescribir} se cifra completa con \texttt{cbc\_cifrar} y se
+guarda en \texttt{falsificado.json}. Cadena resultante:
+
+\begin{center}
+\small
+\begin{tabular}{cll}
+\toprule
+$i$ & $c_i^*$ (falsificada) & $c_i$ (original) \\
+\midrule
+1 & \texttt{acc42ecaebdb06d4e3b2852697a91947} & \texttt{acc42ecaebdb06d4e3b2852697a91947} \\
+2 & \texttt{8f3ebfc015f257f20935a4a9bb070b22} & \texttt{bcba08d852933bcb8614195bedb4781f} \\
+3 & \texttt{3314b26facf1eaae43ea1b86beb9ec3b} & \texttt{7d03a3865c756f1ed89c5c56fd74c0cd} \\
+4 & \texttt{0b1fc3366cb2c953363114fc04286dc5} & \texttt{8210d2b695c9514852ac55dcefa52261} \\
+\bottomrule
+\end{tabular}
+\end{center}
+
+$c_1$ no cambia porque $m_1$ no cambió; desde $c_2$ todo cambia, porque cada bloque arrastra al
+siguiente. Esto \emph{no} es una protección: quien tiene la clave simplemente recalcula todo.
+
+\paso{Tiempo} Promedio de 1000 reescrituras completas: \textbf{22 microsegundos} por historia
+(medido con \texttt{time.perf\_counter} en \texttt{experimentos.py}).
+
+\paso{Respuesta literal del verificador} \texttt{python3 verificador.py cbc falsificado.json}:
+\lstinputlisting[style=salida]{../codigo/salida_verificador_cbc_falsificado.txt}
+El verificador no se dio cuenta de nada: acepta la historia falsa con el mismo mensaje con el que
+acepta la verdadera.
+
+\subsection*{(b) Demostración: la reescritura siempre funciona}
+
+\paso{1}
+\tesis{Fijados $k\in\mathcal{K}$ e $IV\in\B$, la aplicación $F_{k,IV}:(\B)^t\to(\B)^t$,
+$(m_1,\dots,m_t)\mapsto(c_1,\dots,c_t)$ con $c_0=IV$ y $c_i=E_k(m_i\xor c_{i-1})$, es biyectiva, y su
+inversa es $G_{k,IV}(c_1,\dots,c_t) = (m_1,\dots,m_t)$ con $m_i = D_k(c_i)\xor c_{i-1}$, $c_0=IV$.}
+
+\paso{Hipótesis}
+(H1) $k\in\mathcal{K}$ e $IV\in\B$ son fijos y conocidos.
+(H2) Para $k$ fija, $E_k$ es una permutación de $\B$ con inversa $D_k$:
+$D_k(E_k(x))=x$ y $E_k(D_k(y))=y$ para todo $x,y\in\B$.
+(H3) $(\B,\xor)$ cumple (X1), (X2), (X3).
+(H4) $t\ge1$, y $F_{k,IV}$, $G_{k,IV}$ están definidas por las fórmulas de la tesis.
+Ambas están bien definidas: cada componente se calcula a partir de datos ya disponibles
+($c_{i-1}$ es dato de entrada en $G$, y en $F$ se calcula en el paso anterior).
+
+\paso{Planteamiento}
+Una aplicación entre dos conjuntos es biyectiva si y solo si tiene inversa a ambos lados. Probaremos
+(i) $G\circ F = \mathrm{id}_M$ y (ii) $F\circ G = \mathrm{id}_C$. Partimos de la ecuación del enunciado,
+$c_i = E_k(m_i\xor c_{i-1})$.
+
+\paso{Comparación}
+\emph{(i) $G\circ F=\mathrm{id}_M$.} Sea $m=(m_1,\dots,m_t)\in M$ y $c = F(m)$. Sea $(\tilde m_1,\dots,\tilde m_t) = G(c)$.
+Para cada $i$, con $c_0=IV$ en ambas aplicaciones:
+\begin{align*}
+\tilde m_i &= D_k(c_i)\xor c_{i-1} && \text{(definición de } G)\\
+&= D_k\bigl(E_k(m_i\xor c_{i-1})\bigr)\xor c_{i-1} && \text{(definición de } F)\\
+&= (m_i\xor c_{i-1})\xor c_{i-1} && \text{(H2: } D_k\circ E_k=\mathrm{id})\\
+&= m_i\xor (c_{i-1}\xor c_{i-1}) && \text{(X3: asociatividad)}\\
+&= m_i \xor 0 && \text{(X1: } x\xor x=0)\\
+&= m_i && \text{(X2: } x\xor 0 = x).
+\end{align*}
+Observamos que $G$ usa los $c_{i-1}$ \emph{de la cadena} y $F$ usa los $c_{i-1}$ que ella misma produjo: son los mismos
+porque $c=F(m)$. Por tanto $G(F(m))=m$.
+
+\emph{(ii) $F\circ G=\mathrm{id}_C$.} Sea $c=(c_1,\dots,c_t)\in C$, $m = G(c)$ y $(\tilde c_1,\dots,\tilde c_t) = F(m)$, con
+$\tilde c_0 = c_0 = IV$. Probamos por inducción sobre $i$ que $\tilde c_i = c_i$.
+Caso base $i=0$: $\tilde c_0 = IV = c_0$. Paso inductivo: supongamos $\tilde c_{i-1}=c_{i-1}$. Entonces
+\begin{align*}
+\tilde c_i &= E_k(m_i\xor \tilde c_{i-1}) && \text{(definición de } F)\\
+&= E_k(m_i\xor c_{i-1}) && \text{(hipótesis inductiva)}\\
+&= E_k\bigl(D_k(c_i)\xor c_{i-1}\xor c_{i-1}\bigr) && \text{(definición de } G)\\
+&= E_k\bigl(D_k(c_i)\xor 0\bigr) = E_k(D_k(c_i)) && \text{(X3, X1, X2)}\\
+&= c_i && \text{(H2: } E_k\circ D_k=\mathrm{id}).
+\end{align*}
+Luego $F(G(c)) = c$.
+
+\paso{Cierre lógico}
+$F$ tiene inversa por la izquierda (i), luego es inyectiva; tiene inversa por la derecha (ii), luego es
+sobreyectiva. Una aplicación inyectiva y sobreyectiva es biyectiva, y su inversa es única e igual a $G$.
+La demostración no usa ninguna propiedad de los $m_i$: vale para \emph{toda} historia de longitud $t$.
+
+\paso{Conclusión}
+Conocidos $k$ e $IV$, $F_{k,IV}$ es una biyección de $(\B)^t$ en sí mismo con inversa explícita
+$G_{k,IV}$, $m_i = D_k(c_i)\xor c_{i-1}$. \hfill$\blacksquare$
+
+\paso{2. Consecuencia}
+Sí: por la sobreyectividad (en realidad basta con que $F$ esté definida en todo $M$), para toda historia
+alternativa $m^*\in M$ existe una cadena que la verifica, a saber $c^* = F_{k,IV}(m^*)$, y por la inyectividad es la única
+con ese $IV$. Para construirla hace falta exactamente lo mismo que para cifrar: la clave $k$ y el $IV$
+(que es público). No hace falta ninguna búsqueda; es un cálculo directo de $t$ cifrados AES, que
+medimos en 22\,$\mu$s. Como el ``verificador'' solo comprueba que $G(c^*)$ tenga un formato válido, y
+$G(c^*) = m^*$ tiene formato válido por construcción, acepta $c^*$ siempre.
+
+\subsection*{(c) Dictamen}
+
+\paso{Contra qué sí protege}
+Contra la \emph{corrupción accidental} de los bloques cifrados: un error aleatorio en $c_j$ destruye
+$m_j$ (ejercicio 1) y, con probabilidad $1-5\cdot10^{-29}$, la basura no cumple el formato y el
+verificador lo detecta. También impide que un tercero \emph{sin} la clave lea el registro: es
+confidencialidad, no integridad.
+
+\paso{Contra qué no protege nunca}
+\begin{itemize}[itemsep=2pt]
+  \item Contra la \emph{alteración deliberada} por quien tiene la clave: es decir, el propio mercado, que es
+        quien custodia el registro. Por (b), cualquier historia se reescribe en microsegundos y verifica.
+  \item Contra un tercero sin clave que \emph{borra extremos}. Lo comprobamos
+        (\texttt{sin\_ultima.json}, \texttt{sin\_primera.json}): quitar $c_4$ deja una cadena de tres
+        entradas válidas; quitar $c_1$ y poner $IV' = c_1$ deja TX02, TX03, TX04 válidas. En ambos casos el
+        verificador responde \texttt{CADENA VALIDA} sin que se haya usado la clave. Es precisamente
+        ``borrar una compra''.
+  \item Contra la manipulación dirigida de bits sin clave (maleabilidad, ejercicio 1(b)), salvo por la
+        redundancia del formato.
+\end{itemize}
+
+\paso{Quién tenía razón}
+El mercado no. Su argumento ---``la cadena verifica, luego no se pudo alterar''--- es falso: hemos
+construido una cadena alterada que verifica, y hemos demostrado que eso es posible para cualquier
+historia. Que la cadena verifique es compatible tanto con que el mercado sea honesto como con que haya
+borrado la compra. Con este registro el usuario no puede \emph{probar} que se la borraron, pero el
+mercado tampoco puede probar que no lo hizo; y la afirmación de que ``es imposible'' es falsa.
+
+%======================================================================
+\section{Ejercicio 3. La cadena que no se deja \hfill (45 puntos)}
+
+\begin{declaracion}
+  \item $h_0 = 0^{128}\in\B$: valor inicial público. $h_1,\dots,h_4\in\B$: valores acumulados.
+  \item $m_1,\dots,m_4\in\B$: entradas en claro, \emph{públicas}, que en Davies--Meyer hacen de clave:
+        $m_i\in\mathcal{K}$.
+  \item $f:\mathcal{K}\times\B\to\B$, $f(m,h) = E_m(h)\xor h$: función de compresión de Davies--Meyer.
+        Recurrencia: $h_i = f(m_i,h_{i-1}) = E_{m_i}(h_{i-1})\xor h_{i-1}$.
+  \item $g:\mathcal{K}\times\B\to\B$, $g(m,h)=E_m(h)$: la misma construcción sin el término final.
+  \item $S\in\B$: sello publicado, \texttt{51cfb2a7bf6b973b899c232b4ecb521c}.
+  \item $m_2^* = \texttt{TX02:L0042:EQ-A\textvisiblespace}$; $h_i^*$: valores acumulados con la historia alterada.
+  \item $x\in\B$: incógnita.
+\end{declaracion}
+
+\subsection*{(a) Construir y explorar}
+
+\paso{1. Implementación}
+\begin{lstlisting}[style=py]
+def davies_meyer(h0, entradas):
+    h = h0
+    for m in entradas:
+        assert len(m) == 16
+        h = xor(aes_e(m, h), h)                       # el mensaje va como clave
+    return h
+\end{lstlisting}
+El orden es \texttt{aes\_e(m, h)}: el bloque de mensaje es la clave de AES y el acumulado es el dato.
+Valores intermedios, idénticos a los que imprime \texttt{python3 verificador.py dm registro\_dm.json}:
+
+\begin{center}
+\begin{tabular}{cl}
+\toprule
+$i$ & $h_i = E_{m_i}(h_{i-1})\xor h_{i-1}$\\
+\midrule
+0 & \texttt{00000000000000000000000000000000}\\
+1 & \texttt{692d1a9c017dc9fea6251bf243385b4b}\\
+2 & \texttt{e0e9a82bb76575a94a4f0153be97c127}\\
+3 & \texttt{460eaf9791f61ab80f21f1601665fcb7}\\
+4 & \texttt{51cfb2a7bf6b973b899c232b4ecb521c}\\
+\bottomrule
+\end{tabular}
+\end{center}
+
+$h_4$ coincide con el sello de \texttt{sello\_publicado.txt}: \texttt{python3 registro\_tool.py sello}
+responde \texttt{COINCIDE}. El sello vive fuera de \texttt{registro\_dm.json} porque es la
+referencia contra la que se compara el registro: si estuviera en el mismo archivo, quien edita el archivo
+editaría también la referencia (ver (c)).
+
+\paso{2. El mismo ataque del ejercicio 2}
+Cambiamos $m_2$ por $m_2^*$ y recomputamos (\texttt{dm\_falsificado.json}):
+
+\begin{center}
+\begin{tabular}{cll}
+\toprule
+$i$ & $h_i^*$ (historia alterada) & ¿igual a $h_i$?\\
+\midrule
+0 & \texttt{00000000000000000000000000000000} & sí\\
+1 & \texttt{692d1a9c017dc9fea6251bf243385b4b} & sí\\
+2 & \texttt{a1815cf55fe8adaf93fbe63829aef30b} & no\\
+3 & \texttt{d23ebb39f7eb3a5b140177367483078c} & no\\
+4 & \texttt{587819e303f7bb5c105313742441de07} & no\\
+\bottomrule
+\end{tabular}
+\end{center}
+
+El verificador responde \texttt{SELLO INCORRECTO. Este registro NO es el publicado.}
+En CBC el paso siguiente era ``recalcular todo y ya''. Aquí recalcular es igual de fácil
+---no hay clave--- pero no sirve, porque el resultado tiene que ser igual a $S$, y $S$ no lo controlamos.
+Las vías para cerrar el sello y el punto exacto en que cada una se detiene:
+
+\begin{enumerate}[itemsep=3pt]
+  \item \emph{Cambiar $S$.} Imposible: está publicado y replicado fuera del registro.
+  \item \emph{Volver a la cadena original desde $h_2^*$.} Habría que encontrar $m_2^*$ con formato válido y
+        $f(m_2^*,h_1)=h_2$, es decir una segunda preimagen de $f$; pero $m_2^*$ ya está fijado por lo que
+        queremos que diga, y $f(m_2^*,h_1)=h_2^*\neq h_2$.
+  \item \emph{Corregir con el último bloque.} Conocido $h_3^*$, buscar $m_4'$ con $E_{m_4'}(h_3^*)\xor h_3^* = S$, o sea
+        \[
+          E_{m_4'}(\texttt{d23ebb39\ldots83078c}) = S\xor h_3^* = \texttt{83f1099e4880ad609d9d541d3a485590}.
+        \]
+        \textbf{Aquí nos detenemos.} Es encontrar la clave AES que lleva un bloque conocido a otro bloque conocido:
+        no hay despeje, solo búsqueda. Probamos 200\,000 claves de formato \texttt{TX04:L0177:\ldots} en 0,99\,s
+        (unas $2\times10^5$ claves/s): ninguna. A ese ritmo, $2^{128}$ claves serían $\approx 5\times 10^{25}$ años.
+        Peor: si $m_4'$ debe cumplir el formato, hay solo $\approx 1{,}8\times10^{10}$ candidatos, y el número esperado
+        de soluciones es $1{,}8\times10^{10}/2^{128}\approx 5\times10^{-29}$: casi seguro \emph{no existe} ninguna.
+  \item \emph{Retroceder desde el sello.} Para ir hacia atrás desde $S$ con $m_4$ habría que hallar $x=h_3$ tal que
+        $E_{m_4}(x)\xor x = S$. Es la ecuación del literal (b)3 y tampoco admite despeje.
+\end{enumerate}
+
+\paso{Qué información faltaría para seguir}
+Una forma de invertir $f$ en alguna de sus dos entradas: o bien una inversa de $x\mapsto E_m(x)\xor x$
+(para retroceder desde $S$), o bien una forma de recuperar la clave de AES a partir de un par
+(texto, cifrado) (para fabricar el último bloque). Ninguna de las dos existe; y nótese que no hay ningún
+secreto que robar que lo resuelva: no hay clave.
+
+\subsection*{(b) De qué depende}
+
+\paso{1. Sin el término final}
+\tesis{Sea $h_i = g(m_i,h_{i-1}) = E_{m_i}(h_{i-1})$. Conocidos $h_i\in\B$ y $m_i\in\mathcal{K}$, existe un único
+$h_{i-1}\in\B$ que satisface la ecuación, y es calculable: $h_{i-1} = D_{m_i}(h_i)$.}
+
+\paso{Hipótesis}
+(H1) $m_i\in\mathcal{K}$ y $h_i\in\B$ son conocidos.
+(H2) Para toda clave $m\in\mathcal K$, $E_m:\B\to\B$ es biyectiva, con inversa $D_m$ computable
+(AES se descifra con la misma eficiencia con que se cifra).
+
+\paso{Planteamiento}
+Partimos de la ecuación $h_i = E_{m_i}(x)$ con incógnita $x\in\B$ y hay que probar dos cosas:
+existencia de solución y unicidad, más que la solución se puede calcular.
+
+\paso{Comparación}
+\emph{Existencia.} Sea $x_0 := D_{m_i}(h_i)$, que está definido porque $D_{m_i}$ es una función en todo $\B$.
+Entonces $E_{m_i}(x_0) = E_{m_i}(D_{m_i}(h_i)) = h_i$ por (H2), luego $x_0$ es solución.\\
+\emph{Unicidad.} Sean $x, x'\in\B$ soluciones: $E_{m_i}(x) = h_i = E_{m_i}(x')$. Aplicando $D_{m_i}$ a ambos lados
+y usando $D_{m_i}\circ E_{m_i} = \mathrm{id}$: $x = x'$. (Es la inyectividad de $E_{m_i}$.)\\
+\emph{Despeje.} De $h_i = E_{m_i}(h_{i-1})$, aplicando $D_{m_i}$: $D_{m_i}(h_i) = D_{m_i}(E_{m_i}(h_{i-1})) = h_{i-1}$.\\
+\emph{Calculabilidad.} $D_{m_i}(h_i)$ es un descifrado AES: una sola operación de coste constante.
+
+\paso{Cierre lógico}
+La solución existe (sobreyectividad), es única (inyectividad) y su fórmula es un descifrado AES, que se ejecuta
+con los datos de (H1). Ninguno de los pasos requiere información adicional a $m_i$ y $h_i$.
+
+\paso{Conclusión}
+Sin el término final, cada paso de la cadena se deshace con $h_{i-1} = D_{m_i}(h_i)$. \hfill$\blacksquare$
+
+Lo comprobamos en \texttt{experimentos.py}: para la variante sin término final, partiendo del sello
+\texttt{44ee89ed\ldots eada27} y descifrando con $m_4, m_3, m_2, m_1$ se recuperan
+$h_3, h_2, h_1$ y llegamos exactamente a $h_0 = 0$.
+
+\paso{2. ¿Quién conoce $m_i$?}
+Todo el mundo. En una cadena de bloques las entradas son públicas ---en \texttt{registro\_dm.json} están en
+claro--- y \emph{tienen} que serlo: sin ellas nadie podría verificar recomputando. Así, en
+$h_i=E_{m_i}(h_{i-1})$ la ``clave'' de la permutación es un dato público; la permutación entera, con su
+inversa, está en manos de cualquiera. En CBC la reversibilidad estaba restringida a quien tuviera $k$;
+aquí se le regala a todos.
+
+Conclusión: \textbf{cualquiera} podría retroceder esa cadena, y \textbf{no necesita ningún secreto}.
+Lo demostramos con una falsificación concreta: tomando la historia falsa (TX02 en EQ-A) y retrocediendo desde
+el sello con $D_{m_4}, D_{m_3}, D_{m_2^*}, D_{m_1}$ obtuvimos
+$h_0' = \texttt{4d311f3f3b922efe3b58a6d210b2bb83}$, y la historia falsa encadenada desde $h_0'$ da
+exactamente el mismo sello. Si el punto de partida no está fijado, la falsificación es instantánea.
+Si $h_0$ también está fijado, retroceder no basta por sí solo (hay que empalmar la parte que avanza desde $h_0$ con
+la que retrocede desde $S$), pero el empalme es un encuentro a mitad de camino: variando $2^{64}$ bloques
+en cada mitad se espera una coincidencia, $2^{64}$ operaciones en vez de $2^{128}$, y sigue sin hacer falta
+ningún secreto. Es decir, sin el término final la seguridad de la cadena se derrumba.
+
+\paso{3. Con el término final}
+Para retroceder un paso habría que resolver, para la incógnita $x=h_{i-1}$,
+\[
+  E_{m_i}(x)\xor x = h_i .
+\]
+Intentamos el mismo despeje. Sumar $x$ en ambos lados da $E_{m_i}(x) = h_i\xor x$, y aplicar $D_{m_i}$ da
+\[
+  x = D_{m_i}(h_i\xor x),
+\]
+con $x$ todavía a los dos lados. Cada movimiento algebraico deja la incógnita en dos sitios: una vez
+\emph{dentro} de la permutación no lineal $E_{m_i}$ y otra vez \emph{fuera}, sumada. No hay una operación que
+saque a $x$ de ambos sitios a la vez. La función $x\mapsto E_m(x)\xor x$ no es una permutación (es la suma de una
+permutación pseudoaleatoria y la identidad, y se comporta como una función aleatoria: tiene colisiones y valores sin
+preimagen), así que ni siquiera hay garantía de que la solución exista o sea única, y no se conoce un método mejor que
+probar valores de $x$: del orden de $2^{128}$ intentos.
+
+\emph{Comparación con el Taller 0.} En $a\xor x = b$ la incógnita aparece \textbf{una sola vez}, y la operación que la
+envuelve, sumar $a$, es una traslación del grupo $(\B,\xor)$ que se deshace sumando $a$ otra vez:
+$x = a\xor b$ por (X1) y (X2). La ecuación de Davies--Meyer tiene lo que aquella no tenía: \textbf{la incógnita aparece dos
+veces, una dentro de una permutación no lineal y otra fuera de ella}. El término $\xor h_{i-1}$, que parecía sobrar,
+es exactamente lo que vuelve el paso no invertible aunque $E_{m_i}$ y $D_{m_i}$ sean públicas.
+
+\subsection*{(c) Cerrar el caso}
+
+\begin{center}
+\renewcommand{\arraystretch}{1.3}
+\begin{tabularx}{\linewidth}{>{\raggedright\arraybackslash}p{3.0cm}>{\raggedright\arraybackslash}X>{\raggedright\arraybackslash}X}
+\toprule
+ & \textbf{CBC} $c_i = E_k(m_i\xor c_{i-1})$ & \textbf{Davies--Meyer} $h_i = E_{m_i}(h_{i-1})\xor h_{i-1}$\\
+\midrule
+¿Recurrencia reversible? & Sí, para quien tiene $k$: $m_i = D_k(c_i)\xor c_{i-1}$ (biyección, ej.~2(b)). & No, para nadie: $E_{m_i}(x)\xor x=h_i$ no tiene despeje (ej.~3(b)3). Sin el término final sí lo sería, y para todos (ej.~3(b)1--2).\\
+¿Qué hace falta para reescribir la historia? & La clave $k$: 4 cifrados AES, 22\,$\mu$s. Para borrar la primera o la última entrada, ni eso. & Invertir la compresión o hallar una clave AES para un par dado: $\approx2^{128}$ trabajo, y con formato válido casi seguro no hay solución. O bien sustituir el sello, que debe estar fuera de su alcance.\\
+¿Qué protege? & Confidencialidad de las entradas frente a quien no tiene $k$; detecta corrupción accidental (vía formato). No da integridad. & Integridad de la historia completa frente al sello publicado. No da confidencialidad: las entradas están en claro.\\
+¿Contra qué adversario? & Contra un tercero sin clave que quiera \emph{leer}. No contra el custodio (tiene $k$), ni contra un tercero que borre extremos o voltee bits. & Contra cualquiera, \emph{incluido el custodio}, siempre que el sello esté publicado fuera de su control y la historia se compare contra él.\\
+\bottomrule
+\end{tabularx}
+\end{center}
+
+\paso{¿Y si el sello estuviera dentro de \texttt{registro\_dm.json}?}
+Entonces el mercado sí saldría impune. Procedimiento exacto:
+\begin{enumerate}[itemsep=1pt]
+  \item Editar la entrada: $m_2 \leftarrow m_2^* = \texttt{TX02:L0042:EQ-A\textvisiblespace}$.
+  \item Recomputar hacia delante desde $h_0$ con la recurrencia, que no requiere clave:
+        $h_1^*, h_2^*, h_3^*, h_4^* = \texttt{587819e303f7bb5c105313742441de07}$.
+  \item Escribir ese $h_4^*$ como el nuevo sello dentro del archivo.
+  \item El verificador recomputa, obtiene $h_4^*$, lo compara con el sello del propio archivo y responde ``sello correcto''.
+\end{enumerate}
+Lo hicimos (\texttt{dm\_con\_sello\_interno.json}, idéntico al \texttt{atk.json} recibido): un verificador que leyera el
+sello del archivo lo acepta; contra el sello publicado, se rechaza. El cálculo cuesta lo mismo que una verificación
+honesta. La función de compresión garantiza que \emph{a una historia le corresponde un único sello} en la práctica;
+no garantiza \emph{cuál es el sello correcto}. Eso lo da el ancla.
+
+Para que un registro sea realmente inmutable hace falta, además de la compresión no invertible:
+\begin{itemize}[itemsep=1pt]
+  \item un \textbf{ancla externa}: el sello publicado y replicado donde el custodio no pueda cambiarlo (otros nodos,
+        una publicación con fecha, un servicio de sellado de tiempo, los propios usuarios guardando copia);
+  \item \textbf{publicación oportuna}: el sello de la historia que incluye una transacción debe salir antes de que
+        nadie tenga motivo para alterarla, y quien compra debe poder quedarse con él;
+  \item fijar públicamente el punto de partida $h_0$ y la longitud de la historia, para que no se pueda empezar
+        en otro sitio ni truncar.
+\end{itemize}
+
+%======================================================================
+\section{La frase que hay que corregir}
+
+La frase ``una cadena de bloques usa CBC'' es engañosa porque confunde \emph{la forma de la recurrencia} con
+\emph{la propiedad que la hace útil}. Las dos fórmulas encadenan, sí, pero CBC encadena con una permutación
+reversible para quien tiene la clave, y eso la hace un mecanismo de confidencialidad: el custodio puede descifrar,
+editar y volver a cifrar sin dejar rastro. Una cadena de bloques necesita lo contrario: que nadie, ni siquiera
+quien la lleva, pueda retroceder.
+
+\textbf{Formulación correcta:} una cadena de bloques encadena cada bloque con el \emph{hash} del anterior, calculado con
+una función de compresión resistente a preimágenes y colisiones (como Davies--Meyer sobre un cifrado de bloque), que
+no se descifra sino que se verifica recomputando; y su inmutabilidad depende además de que el valor final esté anclado
+en un lugar público que el custodio no controla.
+
+%======================================================================
+\section{Informe final}
+
+\subsection{Las demostraciones}
+Están en los ejercicios 2(b)1 (biyectividad de CBC) y 3(b)1 (reversibilidad de la variante sin término final),
+cada una con sus pasos rotulados: Hipótesis, Planteamiento, Comparación, Cierre lógico y Conclusión, y con la tesis
+enunciada en recuadro. El análisis de 3(b)3 explica por qué no hay demostración análoga para Davies--Meyer.
+
+\subsection{Código}
+\subsubsection*{\texttt{registro\_tool.py} (con las tres funciones completadas)}
+\lstinputlisting[style=py]{../codigo/registro_tool.py}
+
+\subsubsection*{\texttt{experimentos.py}}
+\lstinputlisting[style=py]{../codigo/experimentos.py}
+
+\subsection{Cadena falsificada y salida del verificador}
+Archivo \texttt{falsificado.json} (ejercicio 2; el campo \texttt{cadena}, que en el archivo es una sola
+línea de 128 caracteres hexadecimales, se parte aquí en sus cuatro bloques):
+\begin{lstlisting}[style=salida]
+{
+  "modo": "CBC",
+  "formula": "c_i = E_k(m_i XOR c_{i-1})",
+  "clave": "4ac43a52cc764438cae7b3af9fced5a9",
+  "iv": "3c1cc2d73a499ca72f36e7303d76a130",
+  "cadena": "acc42ecaebdb06d4e3b2852697a91947
+             8f3ebfc015f257f20935a4a9bb070b22
+             3314b26facf1eaae43ea1b86beb9ec3b
+             0b1fc3366cb2c953363114fc04286dc5"
+}
+\end{lstlisting}
+Salida literal de \texttt{python3 verificador.py cbc falsificado.json}:
+\lstinputlisting[style=salida]{../codigo/salida_verificador_cbc_falsificado.txt}
+
+Para contraste, la salida de \texttt{python3 verificador.py dm dm\_falsificado.json} (la misma alteración sobre
+Davies--Meyer):
+\lstinputlisting[style=salida]{../codigo/salida_verificador_dm_falsificado.txt}
+
+\subsection{Tabla comparativa}
+Ver la tabla del ejercicio 3(c).
+
+\subsection{Dictamen para el usuario}
+
+\emph{Estimado usuario:}
+
+Usted preguntó si el mercado pudo haber borrado su compra. La respuesta corta es: \textbf{sí, pudo}, y
+con el sistema que usa hoy nadie lo habría notado.
+
+El mercado guarda el registro en una especie de caja fuerte encadenada, en la que cada transferencia queda
+atada a la anterior. Eso suena muy seguro, pero el candado de esa caja tiene una sola llave, y la llave la tiene el
+propio mercado. Con ella puede abrir el registro, cambiar o quitar lo que quiera, volver a cerrarlo y dejarlo
+exactamente igual de ``encadenado'' que antes. Nosotros lo hicimos: cambiamos una transferencia en una fracción de
+segundo y la herramienta oficial del mercado dijo que todo estaba en orden. Incluso sin la llave se puede quitar la
+primera o la última transferencia sin que la herramienta proteste.
+
+Por eso, cuando el mercado dice ``la cadena verifica, así que no pudo pasar'', está diciendo algo que no es cierto. Que
+la herramienta diga que todo está bien no demuestra que nadie haya tocado el registro. Esto no prueba que el mercado
+le haya borrado su compra; prueba que su defensa no vale.
+
+Para que la respuesta fuera ``no, imposible'', el mercado tendría que cambiar dos cosas:
+\begin{enumerate}[itemsep=1pt]
+  \item Dejar de usar un candado con llave y usar un ``sello'': una huella del registro completo que cualquiera puede
+        recalcular, que cambia por completo si se toca una sola letra, y que nadie ---ni siquiera el mercado--- sabe
+        fabricar para un registro distinto.
+  \item Publicar esa huella en un sitio que el mercado no controle (por ejemplo, entregársela a cada comprador en su
+        recibo, o publicarla en varios lugares independientes). Si el mercado guarda la huella en su propio cajón, puede
+        cambiar el registro y la huella a la vez.
+\end{enumerate}
+Con esas dos condiciones, usted guardaría la huella del día de su compra y, si alguien borrara su transferencia, la
+huella dejaría de coincidir y cualquiera podría comprobarlo.
+
+\subsection{Media página por integrante: por qué ``una cadena de bloques usa CBC'' es engañoso}
+
+\emph{Nota: cada integrante debe redactar o revisar su propia sección. Lo que sigue son cuatro enfoques distintos
+como punto de partida.}
+
+\subsubsection*{Integrante 1: \underline{\hspace{4cm}} --- La forma no es la propiedad}
+Las fórmulas $c_i = E_k(m_i\xor c_{i-1})$ y $h_i = H(B_i, h_{i-1})$ se parecen porque las dos son recurrencias: cada
+término depende del anterior. Pero ``depender del anterior'' es una propiedad de la forma, y la seguridad no está en
+la forma sino en la función que se aplica en cada paso. En CBC esa función es una permutación que, con la clave, se
+deshace; demostramos que la aplicación historia$\to$cadena es una biyección con inversa explícita. Un objeto
+biyectivo y calculable en ambos sentidos no puede servir de prueba de nada: cada historia tiene su cadena y cada
+cadena su historia, y pasar de una a otra cuesta microsegundos. Decir que una cadena de bloques ``usa CBC'' es tomar
+el parecido de las fórmulas por un parecido de propiedades. Lo correcto: una cadena de bloques encadena con una
+función de compresión no invertible, y se verifica recomputando, no descifrando.
+
+\subsubsection*{Integrante 2: \underline{\hspace{4cm}} --- ¿Quién tiene la llave?}
+En CBC la única barrera para reescribir la historia es la clave, y en un registro la clave la tiene precisamente quien
+lo custodia: el adversario del que queremos protegernos. CBC protege contra terceros que quieren \emph{leer}, no contra
+el custodio que quiere \emph{editar}. Además mostramos que, aun sin la clave, borrar la primera o la última entrada
+deja una cadena que el verificador acepta. Una cadena de bloques invierte el planteamiento: no hay llave, las entradas
+son públicas y la protección no consiste en ocultar sino en que nadie pueda fabricar una historia distinta con el mismo
+sello. Por eso la formulación correcta no menciona cifrado: una cadena de bloques es una cadena de hashes, cuya
+seguridad descansa en la dificultad de invertir la compresión, y no en un secreto.
+
+\subsubsection*{Integrante 3: \underline{\hspace{4cm}} --- Un solo término}
+El ejercicio 3 muestra que la diferencia puede ser un solo término. Davies--Meyer sin el $\xor h_{i-1}$ final es
+$h_i = E_{m_i}(h_{i-1})$, una permutación de $h_{i-1}$ cuya ``clave'' es el mensaje, que es público; cualquiera la
+retrocede con $D_{m_i}$. Esa variante sí ``se parece a CBC'' en lo esencial ---es reversible--- y es insegura por eso.
+Con el término final, la ecuación $E_{m_i}(x)\xor x = h_i$ tiene la incógnita dentro y fuera de una permutación y no se
+despeja. La moraleja es que lo que hace a una cadena de bloques no es usar un cifrado de bloque (Davies--Meyer usa AES),
+sino usarlo de forma que el resultado no sea invertible. Decir ``usa CBC'' esconde justo el detalle que importa.
+
+\subsubsection*{Integrante 4: \underline{\hspace{4cm}} --- El ancla}
+Incluso con una función no invertible, el ejercicio 3(c) muestra que si el sello vive dentro del archivo, el custodio
+cambia una entrada, recalcula y reemplaza el sello, sin ninguna clave. La función de compresión solo garantiza que a
+cada historia le corresponde un sello; no dice cuál es el correcto. Eso lo decide un valor publicado que el custodio no
+controla. En una cadena de bloques ese papel lo cumplen la replicación y el consenso entre muchos participantes. Por
+eso la frase ``una cadena de bloques usa CBC'' es doblemente engañosa: atribuye la seguridad a un modo de cifrado,
+cuando proviene de dos cosas que CBC no tiene: una compresión que no se deja invertir y un ancla pública fuera del
+alcance de quien lleva el registro.
+
+\end{document}
